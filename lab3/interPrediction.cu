@@ -117,72 +117,26 @@ void getBlock_CPU(int *block, int *frame, int i, int j, Parameters p)
 /************************************************************************************/
 void getSearchArea_CPU(int *searchArea, int *frame, int i, int j, Parameters p)
 {
+    int step = 2 * p.searchRange + p.blockSize;
     for (int m = -p.searchRange; m < p.searchRange + p.blockSize; m++)
         for (int n = -p.searchRange; n < p.searchRange + p.blockSize; n++)
             if (((0 <= (i + m)) && ((i + m) < p.height)) && ((0 <= (j + n)) && ((j + n) < p.width)))
             {
-                searchArea[(p.searchRange + m) * (2 * p.searchRange + p.blockSize) + (p.searchRange + n)] = frame[(i + m) * p.width + j + n];
+                searchArea[(p.searchRange + m) * step + (p.searchRange + n)] = frame[(i + m) * p.width + j + n];
             }
             else
             {
-                searchArea[(p.searchRange + m) * (2 * p.searchRange + p.blockSize) + (p.searchRange + n)] = 0;
+                searchArea[(p.searchRange + m) * step + (p.searchRange + n)] = 0;
             }
 }
 
-void getSearchArea_GPU(int *searchArea, int *frame, int i, int j, Parameters p)
+__global__ void getSearchArea_GPU(int *searchArea, int *frame, int i, int j, Parameters p, int step)
 {
-    for (int m = 0, m_if = m - p.searchRange; m < 2 * p.searchRange + p.blockSize; m++, m_if++)
-    {
-        for (int n = 0, n_if = n - p.searchRange; n < 2 * p.searchRange + p.blockSize; n++, n_if++)
-        {
-            searchArea[m * (2 * p.searchRange + p.blockSize) + n] = frame[(i + m_if) * p.width + j + n_if];
-        }
-    }
+    unsigned int column = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int row = blockIdx.y * blockDim.y + threadIdx.y;
+    searchArea[row * step + column] = frame[(i + row - p.searchRange) * p.width + j + column - p.searchRange];
 }
 /************************************************************************************/
-
-__global__ void sum_SAD(int *curr, int *search, int *d_results, int posX, int posY, int step_search)
-{
-    unsigned int tid = threadIdx.x;
-    unsigned int row = blockIdx.y;
-    unsigned int column_search = tid + posY;
-    unsigned int row_search = row + posX;
-    __shared__ int sad[BLOCK_SIZE];
-    sad[tid] = abs(curr[row * blockDim.x + tid] - search[row_search * step_search + column_search]);
-    __syncthreads();
-    for (int i = blockDim.x >> 1; i > 0; i = i >> 1)
-    {
-        if (tid < i)
-        {
-            sad[tid] += sad[tid + i];
-        }
-        __syncthreads();
-    }
-    if (tid == 0)
-    {
-        d_results[row] = sad[0];
-    }
-}
-
-__global__ void sum_results(int *d_results)
-{
-    unsigned int tid = threadIdx.x;
-    __shared__ int sad[BLOCK_SIZE];
-    sad[tid] = d_results[tid];
-    __syncthreads();
-    for (int i = blockDim.x >> 1; i > 0; i = i >> 1)
-    {
-        if (tid < i)
-        {
-            sad[tid] += sad[tid + i];
-        }
-        __syncthreads();
-    }
-    if (tid == 0)
-    {
-        d_results[0] = sad[0];
-    }
-}
 
 void SAD_CPU(BestResult *bestResult, int *CurrentBlock, int *SearchArea, int rowIdx, int colIdx, int k, int m, Parameters p)
 {
@@ -214,31 +168,6 @@ void SAD_CPU(BestResult *bestResult, int *CurrentBlock, int *SearchArea, int row
     }
 }
 
-void SAD_GPU(BestResult *bestResult, int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int colIdx, int k, int m, Parameters p, int *d_results)
-{
-    // k, m: displacement (motion vector) under analysis (in the search area)
-    int posX = p.searchRange + k; // normalized coordinates within search area, between 0 and 2*searchRange
-    int posY = p.searchRange + m; // normalized coordinates within search area, between 0 and 2*searchRange
-
-    // computes SAD disparity, by comparing the current block with the reference block at (k,m)
-    dim3 gridDist(1, p.blockSize, 1); // X -> p.blockSize (threadIdx.x)
-    dim3 blockDist(BLOCK_SIZE, 1, 1); // Y    -> tamanhoy (blockIdx.y)
-    sum_SAD<<<gridDist, blockDist>>>(d_CurrentBlock, d_SearchArea, d_results, posX, posY, (2 * p.searchRange + p.blockSize));
-    sum_results<<<1, BLOCK_SIZE>>>(d_results);
-    int sad[1];
-    if (cudaMemcpy(sad, d_results, sizeof(int), cudaMemcpyDeviceToHost) != cudaSuccess)
-    {
-        printf("FAILED TO COPY results DATA TO THE host: %s\n", cudaGetErrorString(cudaGetLastError()));
-        exit(0);
-    }
-    if (sad[0] < bestResult->sad)
-    {
-        bestResult->sad = sad[0];
-        bestResult->vec_x = k;
-        bestResult->vec_y = m;
-    }
-}
-
 void fullSearch_CPU(BestResult *bestResult, int *CurrentBlock, int *SearchArea, int rowIdx, int colIdx, Parameters p)
 {
     bestResult->sad = BigSAD;
@@ -254,74 +183,156 @@ void fullSearch_CPU(BestResult *bestResult, int *CurrentBlock, int *SearchArea, 
     }
 }
 
-void fullSearch_GPU(BestResult *bestResult, int *d_CurrentBlock, int *SearchArea, int rowIdx, int colIdx, Parameters p, int *d_results)
+// __global__ void sum_SAD(int *curr, int *search, int *d_results, int posX, int posY, int step_search)
+// {
+//     unsigned int column = blockIdx.x * blockDim.x + threadIdx.x;
+//     unsigned int row = blockIdx.y * blockDim.y + threadIdx.y;
+//     unsigned int column_search = column + posY;
+//     unsigned int row_search = row + posX;
+//     __shared__ int sad[BLOCK_SIZE];
+//     sad[column] = abs(curr[row * blockDim.x + column] - search[row_search * step_search + column_search]);
+//     __syncthreads();
+//     for (int i = blockDim.x >> 1; i > 0; i = i >> 1)
+//     {
+//         if (column < i)
+//         {
+//             sad[column] += sad[column + i];
+//         }
+//         __syncthreads();
+//     }
+//     if (column == 0)
+//     {
+//         d_results[row] = sad[0];
+//     }
+// }
+
+// __global__ void sum_results(int *d_results)
+// {
+//     unsigned int tid = threadIdx.x;
+//     __shared__ int sad[BLOCK_SIZE];
+//     sad[tid] = d_results[tid];
+//     __syncthreads();
+//     for (int i = blockDim.x >> 1; i > 0; i = i >> 1)
+//     {
+//         if (tid < i)
+//         {
+//             sad[tid] += sad[tid + i];
+//         }
+//         __syncthreads();
+//     }
+//     if (tid == 0)
+//     {
+//         d_results[0] = sad[0];
+//     }
+// }
+
+// __global__ void SAD_GPU(BestResult *bestResult, int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int colIdx, Parameters p, int *d_results)
+// {
+//     int posX = blockIdx.x * blockDim.x + threadIdx.x;
+//     int posY = blockIdx.y * blockDim.y + threadIdx.y;
+//     int sum_array[32];
+//     // computes SAD disparity, by comparing the current block with the reference block at (k,m)
+//     dim3 gridDist(1, p.blockSize, 1); // X -> p.blockSize (threadIdx.x)
+//     dim3 blockDist(BLOCK_SIZE, 1, 1); // Y    -> tamanhoy (blockIdx.y)
+//     sum_SAD<<<gridDist, blockDist>>>(d_CurrentBlock, d_SearchArea, sum_array, posX, posY, (2 * p.searchRange + p.blockSize));
+//     sum_results<<<1, BLOCK_SIZE>>>(sum_array);
+//     __syncthreads();
+//     d_results[posY * 2 * SEARCH_RANGE + posX] = sum_array[0];
+// }
+
+__global__ void SAD_GPU(int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int colIdx, Parameters p, int *d_results)
+{
+    {
+        int sad = 0;
+        int step_search = 2 * p.searchRange + p.blockSize;
+        int posX = blockIdx.y * blockDim.y + threadIdx.y;
+        int posY = blockIdx.x * blockDim.x + threadIdx.x;
+        // computes SAD disparity, by comparing the current block with the reference block at (k,m)
+        for (int i = 0; i < p.blockSize; i++)
+        {
+            for (int j = 0; j < p.blockSize; j++)
+            {
+                sad += abs(d_CurrentBlock[i * p.blockSize + j] - d_SearchArea[(posX + i) * step_search + (posY + j)]);
+            }
+        }
+        // compares the obtained sad with the best so far for that block
+        d_results[posY * 2 * SEARCH_RANGE + posX] = sad;
+    }
+}
+
+void fullSearch_GPU(BestResult *bestResult, int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int colIdx, Parameters p, int *d_results, int *results)
 {
     bestResult->sad = BigSAD;
     bestResult->bestDist = 0;
     bestResult->vec_x = 0;
     bestResult->vec_y = 0;
-    int *d_SearchArea;
-    int SizeInBytes_search = (2 * p.searchRange + p.blockSize) * (2 * p.searchRange + p.blockSize) * sizeof(int);
-
-    if (cudaMalloc((void **)&d_SearchArea, SizeInBytes_search) != cudaSuccess)
+    dim3 gridSize(1, 2 * SEARCH_RANGE, 1);
+    dim3 blockSize(2 * SEARCH_RANGE, 1, 1);
+    SAD_GPU<<<gridSize, blockSize>>>(d_CurrentBlock, d_SearchArea, rowIdx, colIdx, p, d_results);
+    if (cudaMemcpy(results, d_results, 4 * SEARCH_RANGE * SEARCH_RANGE * sizeof(int), cudaMemcpyDeviceToHost) != cudaSuccess)
     {
-        printf("CANNOT ALLOCATE d_SearchArea");
+        printf("FAILED TO COPY results DATA TO THE host: %s\n", cudaGetErrorString(cudaGetLastError()));
         exit(0);
     }
-    if (cudaMemcpy(d_SearchArea, SearchArea, SizeInBytes_search, cudaMemcpyHostToDevice) != cudaSuccess)
+    for (int i = 0; i < 2 * SEARCH_RANGE; i++)
     {
-        printf("FAILED TO COPY SearchArea DATA TO THE DEVICE\n");
-        exit(0);
-    }
-
-    for (int iStartX = -p.searchRange; iStartX < p.searchRange; iStartX++)
-    {
-        for (int iStartY = -p.searchRange; iStartY < p.searchRange; iStartY++)
+        for (int j = 0; j < 2 * SEARCH_RANGE; j++)
         {
-            SAD_GPU(bestResult, d_CurrentBlock, d_SearchArea, rowIdx, colIdx, iStartX, iStartY, p, d_results);
+            if (results[i * 2 * SEARCH_RANGE + j] < bestResult->sad)
+            {
+                bestResult->sad = results[i * 2 * SEARCH_RANGE + j];
+                bestResult->vec_x = j - SEARCH_RANGE;
+                bestResult->vec_y = i - SEARCH_RANGE;
+            }
         }
     }
-    cudaFree(d_SearchArea);
 }
 /************************************************************************************/
-void MotionEstimation(BestResult **motionVectors, int *curr_frame, int *d_curr_frame, int *ref_frame, Parameters p)
+void MotionEstimation(BestResult **motionVectors, int *curr_frame, int *d_curr_frame, int *ref_frame, int *d_ref_frame, Parameters p)
 {
     BestResult *bestResult;
     int border = 2 * p.searchRange;
     int SizeInBytes_curr = p.blockSize * p.blockSize * sizeof(int);
-    int *d_CurrentBlock, *d_results;
+    int SizeInBytes_search = (2 * p.searchRange + p.blockSize) * (2 * p.searchRange + p.blockSize) * sizeof(int);
+    int *d_CurrentBlock, *d_results, *d_SearchArea;
     int *CurrentBlock = (int *)malloc(SizeInBytes_curr);
+    int *SearchArea = (int *)malloc(SizeInBytes_search);
+    int *results = (int *)malloc(4 * SEARCH_RANGE * SEARCH_RANGE);
     if (cudaMalloc((void **)&d_CurrentBlock, SizeInBytes_curr) != cudaSuccess)
     {
         printf("CANNOT ALLOCATE d_CurrentBlock");
         exit(0);
     }
-    if (cudaMalloc((void **)&d_results, BLOCK_SIZE * sizeof(int)) != cudaSuccess)
+    if (cudaMalloc((void **)&d_results, 4 * SEARCH_RANGE * SEARCH_RANGE * sizeof(int)) != cudaSuccess)
     {
         printf("CANNOT ALLOCATE d_results");
         exit(0);
     }
+    if (cudaMalloc((void **)&d_SearchArea, SizeInBytes_search) != cudaSuccess)
+    {
+        printf("CANNOT ALLOCATE d_SearchArea");
+        exit(0);
+    }
 
-    // Para mudar search area
-    int *SearchArea = (int *)malloc((2 * p.searchRange + p.blockSize) * (2 * p.searchRange + p.blockSize) * sizeof(int));
     for (int rowIdx = 0; rowIdx < (p.height - p.blockSize + 1); rowIdx += p.blockSize)
     {
         for (int colIdx = 0; colIdx < (p.width - p.blockSize + 1); colIdx += p.blockSize)
         {
             // Gets current block and search area data
-            dim3 gridBlock(1, p.blockSize, 1);  // X -> p.blockSize (threadIdx.x)
-            dim3 blockBlock(p.blockSize, 1, 1); // Y    -> p.blockSize (blockIdx.y)
-
+            dim3 gridBlock(1, 1, 1);                      // X -> p.blockSize (threadIdx.x)
+            dim3 blockBlock(p.blockSize, p.blockSize, 1); // Y    -> p.blockSize (blockIdx.y)
+            dim3 gridSearch(2, 16, 1);
+            dim3 blockSearch(80, 10, 1);
             if (rowIdx >= p.searchRange && colIdx >= p.searchRange && rowIdx < p.height - border && colIdx < p.width - border)
             {
                 getBlock_GPU<<<gridBlock, blockBlock>>>(d_CurrentBlock, d_curr_frame, rowIdx, colIdx, p);
-                getSearchArea_GPU(SearchArea, ref_frame, rowIdx, colIdx, p);
+                getSearchArea_GPU<<<gridSearch, blockSearch>>>(d_SearchArea, d_ref_frame, rowIdx, colIdx, p, (2 * p.searchRange + p.blockSize));
                 bestResult = &(motionVectors[rowIdx / p.blockSize][colIdx / p.blockSize]);
                 // Runs the motion estimation algorithm on this block
                 switch (p.algorithm)
                 {
                 case FSBM:
-                    fullSearch_GPU(bestResult, d_CurrentBlock, SearchArea, rowIdx, colIdx, p, d_results);
+                    fullSearch_GPU(bestResult, d_CurrentBlock, d_SearchArea, rowIdx, colIdx, p, d_results, results);
                     break;
                 default:
                     break;
@@ -347,7 +358,9 @@ void MotionEstimation(BestResult **motionVectors, int *curr_frame, int *d_curr_f
     free(CurrentBlock);
     cudaFree(d_CurrentBlock);
     cudaFree(d_results);
+    free(results);
     free(SearchArea);
+    cudaFree(d_SearchArea);
 }
 
 /************************************************************************************/
@@ -424,7 +437,8 @@ int main(int argc, char **argv)
     // Read first frame
     getLumaFrame(curr_frame, video_in, p); // curr_frame contains the current luminance frame
     //
-    int *d_curr_frame;
+
+    int *d_curr_frame, *d_ref_frame;
     int SizeInBytes_frame = p.width * p.height * sizeof(int);
     if (cudaMalloc((void **)&d_curr_frame, SizeInBytes_frame) != cudaSuccess)
     {
@@ -432,8 +446,28 @@ int main(int argc, char **argv)
         exit(0);
     }
 
+    if (cudaMalloc((void **)&d_ref_frame, SizeInBytes_frame) != cudaSuccess)
+    {
+        printf("CANNOT ALLOCATE d_ref_frame");
+        exit(0);
+    }
+
+    if (cudaMemcpy(d_ref_frame, curr_frame, SizeInBytes_frame, cudaMemcpyHostToDevice) != cudaSuccess)
+    {
+        printf("FAILED TO COPY ReferenceFrame DATA TO THE DEVICE\n");
+        exit(0);
+    }
+
     for (int frameNum = 0; frameNum < p.frames; frameNum++)
     {
+        if (frameNum != 0)
+        {
+            int *d_temp;
+            d_temp = d_ref_frame;
+            d_ref_frame = d_curr_frame; // ref_frame contains the previous (reference) luminance frame
+            d_curr_frame = d_temp;
+        }
+        printf("INDICE 1\n");
         int *temp;
         temp = ref_frame;
         ref_frame = curr_frame; // ref_frame contains the previous (reference) luminance frame
@@ -448,7 +482,8 @@ int main(int argc, char **argv)
         }
 
         // Process the current frame, one block at a time, to obatin an array with the motion vectors and SAD values
-        MotionEstimation(motionVectors, curr_frame, d_curr_frame, ref_frame, p);
+        MotionEstimation(motionVectors, curr_frame, d_curr_frame, ref_frame, d_ref_frame, p);
+        printf("INDICE 2\n");
         // Recustruct the predicted frame using the obtained motion vectors
         for (int rowIdx = 0; rowIdx < p.height - p.blockSize + 1; rowIdx += p.blockSize)
         {
