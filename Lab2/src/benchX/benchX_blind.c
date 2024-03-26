@@ -96,10 +96,11 @@ int main()
 
     for (i = 0; i < N; i++)
     {
-        cc = C[i];
+	aa = A[i];
+ 	cc = C[i];
         for (k = 0; k < N; k++)
         {
-            temp = A[i][k];
+            temp = aa[k];
             bb = B[k];
             s0 = temp * bb[0];
             s1 = temp * bb[1];
@@ -185,3 +186,4 @@ int main()
     }
     return 0;
 }
+
