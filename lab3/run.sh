@@ -21,6 +21,7 @@ make
 #FSBM
 #./interPrediction_cpu ./video/video2_1920x1080_4.yuv 1920 1080 4 0 0
 ./interPrediction_gpu ./video/video2_1920x1080_4.yuv 1920 1080 4 0 0
+./interPrediction_gpu_teste ./video/video2_1920x1080_4.yuv 1920 1080 4 0 0
 #TZS
 #./interPrediction_cpu ./video/video2_1920x1080_4.yuv 1920 1080 4 1 0
 #StepSearch
@@ -30,7 +31,7 @@ make
 #######
 #FSBM
 #./interPrediction_cpu ./video/video3_1920x1080_60.yuv 1920 1080 60 0 0
-./interPrediction_gpu ./video/video3_1920x1080_60.yuv 1920 1080 60 0 0
+#./interPrediction_gpu ./video/video3_1920x1080_60.yuv 1920 1080 60 0 0
 #TZS
 #./interPrediction_cpu ./video/video3_1920x1080_60.yuv 1920 1080 60 1 0
 #StepSearch

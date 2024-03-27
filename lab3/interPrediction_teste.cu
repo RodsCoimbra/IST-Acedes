@@ -201,31 +201,35 @@ __global__ void SAD_GPU(int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int 
     {
         int step_search = 2 * SEARCH_RANGE + BLOCK_SIZE;
         int posX = blockIdx.y * blockDim.y + threadIdx.y;
-        int i = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
-        int tid = threadIdx.x;
+        int tid = (blockIdx.x * blockDim.x + threadIdx.x);
+        int i = tid * 4;
         int posY = blockIdx.z * blockDim.z + threadIdx.z;
         int f = i >> 5;
         int g = i & 31;
-        __shared__ int sad_shared[512];
+        __shared__ int sad_shared[256];
 
         // computes SAD disparity, by comparing the current block with the reference block at (k,m)
-        sad_shared[tid] = abs(d_CurrentBlock[i] - d_SearchArea[(posX + f) * step_search + (posY + g)]) + abs(d_CurrentBlock[i + 1] - d_SearchArea[(posX + f) * step_search + (posY + g)]);
+        sad_shared[tid] = abs(d_CurrentBlock[i] - d_SearchArea[(posX + f) * step_search + (posY + g)]) + abs(d_CurrentBlock[i + 1] - d_SearchArea[(posX + f) * step_search + (posY + g + 1)]) + abs(d_CurrentBlock[i + 2] - d_SearchArea[(posX + f) * step_search + (posY + g + 2)]) + abs(d_CurrentBlock[i + 3] - d_SearchArea[(posX + f) * step_search + (posY + g + 3)]);
         __syncthreads();
 
-        for (int j = blockDim.x >> 1; j > 64; j = j >> 1)
-        {
-            if (i < j)
-            {
-                sad_shared[tid] += sad_shared[tid + j];
-            }
-            __syncthreads();
-        }
-        if (i < 64)
+        // if (tid < 256)
+        //     sad_shared[tid] += sad_shared[tid + 256];
+        // __syncthreads();
+
+        if (tid < 128)
+            sad_shared[tid] += sad_shared[tid + 128];
+        __syncthreads();
+
+        if (tid < 64)
+            sad_shared[tid] += sad_shared[tid + 64];
+        __syncthreads();
+
+        if (tid < 32)
         {
             warpReduce(sad_shared, tid);
         }
         // compares the obtained sad with the best so far for that block
-        if (i == 0)
+        if (tid == 0)
         {
             d_results[posY * 2 * SEARCH_RANGE + posX] = sad_shared[0];
         }
@@ -240,7 +244,7 @@ void fullSearch_GPU(BestResult *bestResult, int *d_CurrentBlock, int *d_SearchAr
     bestResult->vec_x = 0;
     bestResult->vec_y = 0;
     dim3 gridSize(1, 2 * SEARCH_RANGE, 2 * SEARCH_RANGE);
-    dim3 blockSize(BLOCK_SIZE * 16, 1, 1);
+    dim3 blockSize(BLOCK_SIZE * 8, 1, 1);
     SAD_GPU<<<gridSize, blockSize>>>(d_CurrentBlock, d_SearchArea, rowIdx, colIdx, p, d_results);
     if (cudaMemcpy(results, d_results, 4 * SEARCH_RANGE * SEARCH_RANGE * sizeof(int), cudaMemcpyDeviceToHost) != cudaSuccess)
     {
