@@ -14,8 +14,8 @@ interPrediction_cpu: interPrediction.c
 	$(HOST_CC) $(HOST_CC_FLAGS) interPrediction.c -o interPrediction_cpu
 
 ########### GPU SIDE (HOST+GPU) COMPILATION ###########
-interPrediction_gpu: interPrediction.cu 
-	$(GPU_CC) $(GPU_CC_FLAGS) interPrediction.cu -o interPrediction_gpu
+interPrediction_gpu: interPrediction_teste.cu 
+	$(GPU_CC) $(GPU_CC_FLAGS) interPrediction_teste.cu -o interPrediction_gpu
 
 
 clean:
