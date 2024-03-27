@@ -21,4 +21,4 @@ interPrediction_gpu_teste: interPrediction_teste.cu
 	$(GPU_CC) $(GPU_CC_FLAGS) interPrediction_teste.cu -o interPrediction_gpu_teste
 
 clean:
-	-@rm -rf interPrediction_cpu interPrediction_gpu reconst.yuv residue.yuv *~ *.o  2>/dev/null || true
+	-@rm -rf interPrediction_cpu interPrediction_gpu interPrediction_gpu_teste reconst.yuv residue.yuv *~ *.o  2>/dev/null || true
