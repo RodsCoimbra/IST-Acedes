@@ -196,7 +196,7 @@ __device__ void warpReduce(volatile int *shared_data, int tid)
 }
 
 /************************************************************************************/
-__global__ void SAD_GPU(int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int colIdx, Parameters p, int *d_results)
+__global__ void SAD_GPU(int *d_CurrentBlock, int *d_SearchArea, Parameters p, int *d_results)
 {
     {
         int step_search = 2 * SEARCH_RANGE + BLOCK_SIZE;
@@ -237,7 +237,7 @@ __global__ void SAD_GPU(int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int 
 }
 
 /************************************************************************************/
-void fullSearch_GPU(BestResult *bestResult, int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int colIdx, Parameters p, int *d_results, int *results)
+void fullSearch_GPU(BestResult *bestResult, int *d_CurrentBlock, int *d_SearchArea, Parameters p, int *d_results, int *results)
 {
     bestResult->sad = BigSAD;
     bestResult->bestDist = 0;
@@ -394,8 +394,8 @@ int main(int argc, char **argv)
     }
 
     // Frame memory allocation
-    int *curr_frame = (int *)malloc(p.width * p.height * sizeof(int *));
-    int *ref_frame = (int *)malloc(p.width * p.height * sizeof(int *));
+    int *curr_frame = (int *)malloc(p.width * p.height * sizeof(int));
+    int *ref_frame = (int *)malloc(p.width * p.height * sizeof(int));
     int **res_frame = (int **)malloc(p.height * sizeof(int *));
     int **rec_frame = (int **)malloc(p.height * sizeof(int *));
     for (int i = 0; i < p.height; i++)

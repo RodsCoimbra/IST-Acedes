@@ -137,6 +137,8 @@ void SAD(BestResult *bestResult, int **CurrentBlock, int **SearchArea, int rowId
             bestResult->vec_y = m;
         }
     }
+    else{}
+
 }
 /************************************************************************************/
 void StepSearch(BestResult *bestResult, int **CurrentBlock, int **SearchArea, int rowIdx, int colIdx, Parameters p)
@@ -328,15 +330,6 @@ void MotionEstimation(BestResult **motionVectors, int **curr_frame, int **ref_fr
         {
             // Gets current block and search area data
             getBlock(CurrentBlock, curr_frame, rowIdx, colIdx, p);
-            // for (int i = 0; i < 10; i++)
-            // {
-            //     for (int j = 0; j < 10; j++)
-            //     {
-            //         printf("%d ", CurrentBlock[i][j]);
-            //     }
-            //     printf("\n");
-            // }
-            // exit(0);
             getSearchArea(SearchArea, ref_frame, rowIdx, colIdx, p);
             bestResult = &(motionVectors[rowIdx / p.blockSize][colIdx / p.blockSize]);
             // Runs the motion estimation algorithm on this block
@@ -364,6 +357,7 @@ void MotionEstimation(BestResult **motionVectors, int **curr_frame, int **ref_fr
     free(SearchArea);
 }
 /************************************************************************************/
+
 /************************************************************************************/
 void main(int argc, char **argv)
 {

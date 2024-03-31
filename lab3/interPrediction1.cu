@@ -193,82 +193,67 @@ void fullSearch_CPU(BestResult *bestResult, int *CurrentBlock, int *SearchArea, 
     }
 }
 
-__global__ void SAD_GPU(int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int colIdx, int centerX, int centerY, int distance, Parameters p, int *d_results)
+__global__ void SAD_GPU(int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int colIdx, Parameters p, int *d_results)
 {
-    int sad = 0;
-    int step_search = 2 * SEARCH_RANGE + BLOCK_SIZE;
-    int posX = centerX + (threadIdx.y - 1) * distance + SEARCH_RANGE;
-    int posY = centerY + (threadIdx.x - 1) * distance + SEARCH_RANGE;
-    if ((0 <= (rowIdx + posX)) && ((rowIdx + posX) < p.height) &&
-        (0 <= (colIdx + posY)) && ((colIdx + posY) < p.width))
     {
-        // computes SAD disparity, by comparing the current block with the reference block at (k,m)
-        for (int i = 0; i < BLOCK_SIZE; i++)
+        int sad = 0;
+        int step_search = 2 * SEARCH_RANGE + BLOCK_SIZE;
+        int posX = blockIdx.y * blockDim.y + threadIdx.y;
+        int posY = blockIdx.x * blockDim.x + threadIdx.x;
+        if ((0 <= (rowIdx + posX)) && ((rowIdx + posX) < p.height) &&
+            (0 <= (colIdx + posY)) && ((colIdx + posY) < p.width))
         {
-            for (int j = 0; j < BLOCK_SIZE; j++)
+            // computes SAD disparity, by comparing the current block with the reference block at (k,m)
+            for (int i = 0; i < BLOCK_SIZE; i++)
             {
-                sad += abs(d_CurrentBlock[i * BLOCK_SIZE + j] - d_SearchArea[(posX + i) * step_search + (posY + j)]);
+                for (int j = 0; j < BLOCK_SIZE; j++)
+                {
+                    sad += abs(d_CurrentBlock[i * BLOCK_SIZE + j] - d_SearchArea[(posX + i) * step_search + (posY + j)]);
+                }
             }
+            // compares the obtained sad with the best so far for that block
+            d_results[posY * 2 * SEARCH_RANGE + posX] = sad;
         }
-        // compares the obtained sad with the best so far for that block
-        d_results[threadIdx.x + 3 * threadIdx.y] = sad;
-    }
-    else
-    {
-        d_results[threadIdx.x + 3 * threadIdx.y] = BigSAD;
+        else
+        {
+            d_results[posY * 2 * SEARCH_RANGE + posX] = BigSAD;
+        }
     }
 }
 
-/************************************************************************************/
-void StepSearch(BestResult *bestResult, int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int colIdx, Parameters p, int *d_results, int *results)
+void fullSearch_GPU(BestResult *bestResult, int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int colIdx, Parameters p, int *d_results, int *results)
 {
-
     bestResult->sad = BigSAD;
+    bestResult->bestDist = 0;
     bestResult->vec_x = 0;
     bestResult->vec_y = 0;
-
-    // First prediction, at the center of the search area
-    int CenterX = 0;
-    int CenterY = 0;
-    dim3 gridSize(1, 1, 1);
-    dim3 blockSize(3, 3, 1);
-    // SAD_GPU<<<gridSize, blockSize>>>(d_CurrentBlock, d_SearchArea, rowIdx, colIdx, CenterX, CenterY, 0, p, d_results);
-    //  Furthest search center
-    int Distance = (p.searchRange) >> 1; // Initial distance = search range/2
-    while (Distance >= 1)
+    dim3 gridSize(1, 16, 1);
+    dim3 blockSize(2 * SEARCH_RANGE, 8, 1);
+    SAD_GPU<<<gridSize, blockSize>>>(d_CurrentBlock, d_SearchArea, rowIdx, colIdx, p, d_results);
+    if (cudaMemcpy(results, d_results, 4 * SEARCH_RANGE * SEARCH_RANGE * sizeof(int), cudaMemcpyDeviceToHost) != cudaSuccess)
     {
-        SAD_GPU<<<gridSize, blockSize>>>(d_CurrentBlock, d_SearchArea, rowIdx, colIdx, CenterX, CenterY, Distance, p, d_results);
-
-        if (cudaMemcpy(results, d_results, 9 * sizeof(int), cudaMemcpyDeviceToHost) != cudaSuccess)
+        printf("FAILED TO COPY results DATA TO THE host: %s\n", cudaGetErrorString(cudaGetLastError()));
+        exit(0);
+    }
+    for (int i = 0; i < 2 * SEARCH_RANGE; i++)
+    {
+        for (int j = 0; j < 2 * SEARCH_RANGE; j++)
         {
-            printf("FAILED TO COPY results DATA TO THE host: %s\n", cudaGetErrorString(cudaGetLastError()));
-            exit(0);
-        }
-
-        for (int j = 0; j < 9; j++)
-        { // printf("results[%d] = %d\n",j,results[j]);
-            if (results[j] < bestResult->sad)
+            if (results[i * 2 * SEARCH_RANGE + j] < bestResult->sad)
             {
-                bestResult->sad = results[j];
-                bestResult->vec_x = j / 3 * Distance + CenterX - Distance;
-                bestResult->vec_y = j % 3 * Distance + CenterY - Distance;
+                bestResult->sad = results[i * 2 * SEARCH_RANGE + j];
+                bestResult->vec_x = j - SEARCH_RANGE;
+                bestResult->vec_y = i - SEARCH_RANGE;
             }
         }
-        // printf("best is %d\n",bestResult->sad);
-
-        // At this point, (bestResult->vec_x,bestResult->vec_y) marks the best search point and will be considered as the next search center
-        CenterX = bestResult->vec_x;
-        CenterY = bestResult->vec_y;
-        // Divides the search distance by 2
-        Distance >>= 1;
-    } // printf("best is %d\n",bestResult->sad);
+    }
 }
-
 /************************************************************************************/
 void MotionEstimation(BestResult **motionVectors, int *curr_frame, int *d_curr_frame, int *ref_frame, int *d_ref_frame, Parameters p,
                       int *results, int *d_results, int *d_CurrentBlock, int *d_SearchArea)
 {
     BestResult *bestResult;
+
     for (int rowIdx = 0; rowIdx < (p.height - p.blockSize + 1); rowIdx += p.blockSize)
     {
         for (int colIdx = 0; colIdx < (p.width - p.blockSize + 1); colIdx += p.blockSize)
@@ -282,14 +267,7 @@ void MotionEstimation(BestResult **motionVectors, int *curr_frame, int *d_curr_f
             getSearchArea_GPU<<<gridSearch, blockSearch>>>(d_SearchArea, d_ref_frame, rowIdx, colIdx, p, (2 * p.searchRange + p.blockSize));
             bestResult = &(motionVectors[rowIdx / p.blockSize][colIdx / p.blockSize]);
             // Runs the motion estimation algorithm on this block
-            switch (p.algorithm)
-            {
-            case SS:
-                StepSearch(bestResult, d_CurrentBlock, d_SearchArea, rowIdx, colIdx, p, d_results, results);
-                break;
-            default:
-                break;
-            }
+            fullSearch_GPU(bestResult, d_CurrentBlock, d_SearchArea, rowIdx, colIdx, p, d_results, results);
         }
     }
 }

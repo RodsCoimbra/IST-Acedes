@@ -193,29 +193,54 @@ void fullSearch_CPU(BestResult *bestResult, int *CurrentBlock, int *SearchArea, 
     }
 }
 
+__device__ void warpReduce(volatile int *shared_data, int tid)
+{
+    shared_data[tid] += shared_data[tid + 32];
+    shared_data[tid] += shared_data[tid + 16];
+    shared_data[tid] += shared_data[tid + 8];
+    shared_data[tid] += shared_data[tid + 4];
+    shared_data[tid] += shared_data[tid + 2];
+    shared_data[tid] += shared_data[tid + 1];
+}
+
+/************************************************************************************/
 __global__ void SAD_GPU(int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int colIdx, int centerX, int centerY, int distance, Parameters p, int *d_results)
 {
-    int sad = 0;
-    int step_search = 2 * SEARCH_RANGE + BLOCK_SIZE;
-    int posX = centerX + (threadIdx.y - 1) * distance + SEARCH_RANGE;
-    int posY = centerY + (threadIdx.x - 1) * distance + SEARCH_RANGE;
+    int step_search = 160;
+    int tid = (blockIdx.x * blockDim.x + threadIdx.x);
+    int i = tid << 2;
+    int posX = centerX + (blockIdx.y - 1) * distance + SEARCH_RANGE;
+    int posY = centerY + (blockIdx.z - 1) * distance + SEARCH_RANGE;
+    __shared__ int sad_shared[256];
+    int f = i >> 5;
+    int g = i & 31;
     if ((0 <= (rowIdx + posX)) && ((rowIdx + posX) < p.height) &&
         (0 <= (colIdx + posY)) && ((colIdx + posY) < p.width))
     {
-        // computes SAD disparity, by comparing the current block with the reference block at (k,m)
-        for (int i = 0; i < BLOCK_SIZE; i++)
+        sad_shared[tid] = abs(d_CurrentBlock[i] - d_SearchArea[(posX + f) * step_search + (posY + g)]) + abs(d_CurrentBlock[i + 1] - d_SearchArea[(posX + f) * step_search + (posY + g + 1)]) + abs(d_CurrentBlock[i + 2] - d_SearchArea[(posX + f) * step_search + (posY + g + 2)]) + abs(d_CurrentBlock[i + 3] - d_SearchArea[(posX + f) * step_search + (posY + g + 3)]);
+        __syncthreads();
+
+        if (tid < 128)
+            sad_shared[tid] += sad_shared[tid + 128];
+        __syncthreads();
+
+        if (tid < 64)
+            sad_shared[tid] += sad_shared[tid + 64];
+        __syncthreads();
+
+        if (tid < 32)
         {
-            for (int j = 0; j < BLOCK_SIZE; j++)
-            {
-                sad += abs(d_CurrentBlock[i * BLOCK_SIZE + j] - d_SearchArea[(posX + i) * step_search + (posY + j)]);
-            }
+            warpReduce(sad_shared, tid);
         }
         // compares the obtained sad with the best so far for that block
-        d_results[threadIdx.x + 3 * threadIdx.y] = sad;
+        if (tid == 0)
+        {
+            d_results[blockIdx.z + 3 * blockIdx.y] = sad_shared[0];
+        }
     }
     else
     {
-        d_results[threadIdx.x + 3 * threadIdx.y] = BigSAD;
+        d_results[blockIdx.z + 3 * blockIdx.y] = BigSAD;
     }
 }
 
@@ -230,8 +255,8 @@ void StepSearch(BestResult *bestResult, int *d_CurrentBlock, int *d_SearchArea, 
     // First prediction, at the center of the search area
     int CenterX = 0;
     int CenterY = 0;
-    dim3 gridSize(1, 1, 1);
-    dim3 blockSize(3, 3, 1);
+    dim3 gridSize(1, 3, 3);
+    dim3 blockSize(BLOCK_SIZE * 8, 1, 1);
     // SAD_GPU<<<gridSize, blockSize>>>(d_CurrentBlock, d_SearchArea, rowIdx, colIdx, CenterX, CenterY, 0, p, d_results);
     //  Furthest search center
     int Distance = (p.searchRange) >> 1; // Initial distance = search range/2
