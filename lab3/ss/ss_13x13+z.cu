@@ -206,11 +206,11 @@ __device__ void warpReduce(volatile int *shared_data, int tid)
 /************************************************************************************/
 __global__ void SAD_GPU(int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int colIdx, int centerX, int centerY, int distance, Parameters p, int *d_results)
 {
-    int step_search = 160;
+    int step_search = 2 * SEARCH_RANGE + BLOCK_SIZE;
     int tid = (blockIdx.x * blockDim.x + threadIdx.x);
     int i = tid << 2;
-    int posX = centerX + (blockIdx.y - 1) * distance + SEARCH_RANGE;
-    int posY = centerY + (blockIdx.z - 1) * distance + SEARCH_RANGE;
+    int posX = centerX + (blockIdx.y - 6) * distance + SEARCH_RANGE;
+    int posY = centerY + (blockIdx.z - 6) * distance + SEARCH_RANGE;
     __shared__ int sad_shared[256];
     int f = i >> 5;
     int g = i & 31;
@@ -219,6 +219,10 @@ __global__ void SAD_GPU(int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int 
     {
         sad_shared[tid] = abs(d_CurrentBlock[i] - d_SearchArea[(posX + f) * step_search + (posY + g)]) + abs(d_CurrentBlock[i + 1] - d_SearchArea[(posX + f) * step_search + (posY + g + 1)]) + abs(d_CurrentBlock[i + 2] - d_SearchArea[(posX + f) * step_search + (posY + g + 2)]) + abs(d_CurrentBlock[i + 3] - d_SearchArea[(posX + f) * step_search + (posY + g + 3)]);
         __syncthreads();
+
+        // if (tid < 256)
+        //     sad_shared[tid] += sad_shared[tid + 256];
+        // __syncthreads();
 
         if (tid < 128)
             sad_shared[tid] += sad_shared[tid + 128];
@@ -235,12 +239,12 @@ __global__ void SAD_GPU(int *d_CurrentBlock, int *d_SearchArea, int rowIdx, int 
         // compares the obtained sad with the best so far for that block
         if (tid == 0)
         {
-            d_results[blockIdx.z + 3 * blockIdx.y] = sad_shared[0];
+            d_results[blockIdx.z + 13 * blockIdx.y] = sad_shared[0];
         }
     }
     else
     {
-        d_results[blockIdx.z + 3 * blockIdx.y] = BigSAD;
+        d_results[blockIdx.z + 13 * blockIdx.y] = BigSAD;
     }
 }
 
@@ -255,28 +259,30 @@ void StepSearch(BestResult *bestResult, int *d_CurrentBlock, int *d_SearchArea, 
     // First prediction, at the center of the search area
     int CenterX = 0;
     int CenterY = 0;
-    dim3 gridSize(1, 3, 3);
+    int d7;
+    dim3 gridSize(1, 13, 13);
     dim3 blockSize(BLOCK_SIZE * 8, 1, 1);
     // SAD_GPU<<<gridSize, blockSize>>>(d_CurrentBlock, d_SearchArea, rowIdx, colIdx, CenterX, CenterY, 0, p, d_results);
     //  Furthest search center
-    int Distance = (p.searchRange) >> 1; // Initial distance = search range/2
+    int Distance = (p.searchRange) >> 3; // Initial distance = search range/2
     while (Distance >= 1)
     {
         SAD_GPU<<<gridSize, blockSize>>>(d_CurrentBlock, d_SearchArea, rowIdx, colIdx, CenterX, CenterY, Distance, p, d_results);
 
-        if (cudaMemcpy(results, d_results, 9 * sizeof(int), cudaMemcpyDeviceToHost) != cudaSuccess)
+        if (cudaMemcpy(results, d_results, 169 * sizeof(int), cudaMemcpyDeviceToHost) != cudaSuccess)
         {
             printf("FAILED TO COPY results DATA TO THE host: %s\n", cudaGetErrorString(cudaGetLastError()));
             exit(0);
         }
 
-        for (int j = 0; j < 9; j++)
+	d7 = 6*Distance;
+        for (int j = 0; j < 169; j++)
         { // printf("results[%d] = %d\n",j,results[j]);
             if (results[j] < bestResult->sad)
             {
                 bestResult->sad = results[j];
-                bestResult->vec_x = j / 3 * Distance + CenterX - Distance;
-                bestResult->vec_y = j % 3 * Distance + CenterY - Distance;
+                bestResult->vec_x = (j / 13) * Distance + CenterX - d7;
+                bestResult->vec_y = (j % 13) * Distance + CenterY - d7;
             }
         }
         // printf("best is %d\n",bestResult->sad);
@@ -285,7 +291,7 @@ void StepSearch(BestResult *bestResult, int *d_CurrentBlock, int *d_SearchArea, 
         CenterX = bestResult->vec_x;
         CenterY = bestResult->vec_y;
         // Divides the search distance by 2
-        Distance >>= 1;
+        Distance >>= 3;
     } // printf("best is %d\n",bestResult->sad);
 }
 
@@ -426,7 +432,7 @@ int main(int argc, char **argv)
         exit(0);
     }
 
-    if (cudaMallocHost((int **)&results, 4 * SEARCH_RANGE * SEARCH_RANGE * sizeof(int)) != cudaSuccess)
+    if (cudaMallocHost((int **)&results, 169 * sizeof(int)) != cudaSuccess)
     {
         printf("CANNOT ALLOCATE results");
         exit(0);
@@ -436,7 +442,7 @@ int main(int argc, char **argv)
         printf("CANNOT ALLOCATE d_CurrentBlock");
         exit(0);
     }
-    if (cudaMalloc((void **)&d_results, 4 * SEARCH_RANGE * SEARCH_RANGE * sizeof(int)) != cudaSuccess)
+    if (cudaMalloc((void **)&d_results, 169 * sizeof(int)) != cudaSuccess)
     {
         printf("CANNOT ALLOCATE d_results");
         exit(0);
@@ -521,3 +527,4 @@ int main(int argc, char **argv)
     cudaFree(d_SearchArea);
     return 0;
 }
+

@@ -261,8 +261,8 @@ void MotionEstimation(BestResult **motionVectors, int *curr_frame, int *d_curr_f
             // Gets current block and search area data
             dim3 gridBlock(1, 1, 1);                      // X -> p.blockSize (threadIdx.x)
             dim3 blockBlock(p.blockSize, p.blockSize, 1); // Y    -> p.blockSize (blockIdx.y)
-            dim3 gridSearch(5, 5, 1);
-            dim3 blockSearch(32, 32, 1);
+            dim3 gridSearch(2, 16, 1);
+            dim3 blockSearch(80, 10, 1);
             getBlock_GPU<<<gridBlock, blockBlock>>>(d_CurrentBlock, d_curr_frame, rowIdx, colIdx, p);
             getSearchArea_GPU<<<gridSearch, blockSearch>>>(d_SearchArea, d_ref_frame, rowIdx, colIdx, p, (2 * p.searchRange + p.blockSize));
             bestResult = &(motionVectors[rowIdx / p.blockSize][colIdx / p.blockSize]);
